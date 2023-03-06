@@ -20,8 +20,10 @@ nepoch=4
 gamma=0.99
 lam=0.95
 loops=int(1e+7//nsteps//nenvs)
-
-
+myseed=1
+tf.random.set_seed(myseed)
+np.random.seed(myseed)
+#random.seed(myseed)
 
 losses=["timestep","ent", "vf_loss", "gradnorm",\
     "re","approxkl","clipfrac","ev","mean_rew"]
@@ -73,7 +75,8 @@ def main():
             buf_advs_ext[:, t] = lastgaelam = delta + gamma * lam * nextnotdone * lastgaelam
         bufs_rets_ext = buf_advs_ext +buf_pred_ext
         
-        ev=explained_variance(buf_pred_ext,bufs_rets_ext)
+        ev=explained_variance(buf_pred_ext.swapaxes(0, 1).flatten(),bufs_rets_ext.swapaxes(0, 1).flatten())
+        print(f"{ev=}")
         for i in range(nepoch):
             order=np.arange(nenvs*nsteps)
             np.random.shuffle(order)
@@ -101,7 +104,7 @@ def main():
             with open('save/log.csv', 'w') as f:
                 w = csv.writer(f)
                 w.writerow(D.keys())
-                w.writerows(zip(*D.values()))
+                w.writerows(zip(*(running_mean(x,nminibatch*nepoch) for x in D.values())))
         if ((loop+1)*nenvs*nsteps)%2048000==0:
             tf.saved_model.save(m, 'save/model')
 class model(tf.Module):
@@ -117,10 +120,13 @@ class model(tf.Module):
         self.lrdiscount=self.lr/self.nupdates
 
         self.net=network()
-        self.policy=layers.Dense(action_space,kernel_initializer=tf.keras.initializers.Orthogonal(0.01))
-        self.value=layers.Dense(1,kernel_initializer=tf.keras.initializers.Orthogonal(1))
-        
+        with tf.name_scope("out"):
+            self.policy=layers.Dense(action_space,kernel_initializer=tf.keras.initializers.Orthogonal(0.01),name="action")
+            self.value=layers.Dense(1,kernel_initializer=tf.keras.initializers.Orthogonal(1),name="value")
+            self.policy.build(self.net.output_shape)
+            self.value.build(self.net.output_shape)
         self.optimizer = keras.optimizers.Adam(learning_rate=lr,epsilon=1e-5)
+        #print(self.trainable_variables)
     @tf.function
     def step(self,obs):
         latent=self.net(obs)
@@ -150,10 +156,7 @@ class model(tf.Module):
             vf_loss = 0.5*self.vf_coef*vf_loss_ext
 
             ent=tf.reduce_mean(self.entropy())
-            """if ent<0.8:
-                breakpoint()"""
             neglogpac=tf.nn.sparse_softmax_cross_entropy_with_logits(pactions,self.pd)
-            approxkl = .5 * tf.reduce_mean(tf.square(nlp-neglogpac))
             ratio = tf.exp(nlp-neglogpac)
             negadv = - adv
             pg_losses1 = negadv * ratio
@@ -161,19 +164,14 @@ class model(tf.Module):
             pg_loss = tf.reduce_mean(tf.maximum(pg_losses1, pg_losses2))
             ent_loss =  (-self.ent_coef) * ent
             
-            #maxkl    = .5 * tf.reduce_max(tf.square(neglogpac - nlp))
-            clipfrac = tf.reduce_mean(tf.cast(tf.greater(tf.abs(ratio - 1.0), self.cliprange),tf.float32))
-            """if loop==10:
-                breakpoint()"""
             loss = pg_loss + ent_loss + vf_loss 
-        
-            
-                
         grads = tape.gradient(loss, self.trainable_variables)
         grads,gradnorm=tf.clip_by_global_norm(grads,0.5)
         self.optimizer.apply_gradients(zip(grads, self.trainable_variables))
                     
-
+        approxkl = .5 * tf.reduce_mean(tf.square(nlp-neglogpac))
+        clipfrac = tf.reduce_mean(tf.cast(tf.greater(tf.abs(ratio - 1.0), self.cliprange),tf.float32))
+            
         self.lr-=self.lrdiscount
         self.optimizer.learning_rate.assign(self.lr)
         return vf_loss,ent,approxkl,clipfrac,gradnorm
@@ -225,8 +223,9 @@ def explained_variance(ypred,y):
             assert y.ndim == 1 and ypred.ndim == 1
         except:
             assert y.shape==ypred.shape
-            y=tf.squeeze(y)
-            ypred=tf.squeeze(ypred)
+            y=y.flatten()
+            ypred=ypred.flatten()
+            assert y.ndim == 1 and ypred.ndim == 1
         vary = np.var(y)
         return np.nan if vary==0 else 1 - np.var(y-ypred)/vary
 D={key:[] for key in losses}
@@ -248,7 +247,9 @@ def mean(x):
         return np.mean(x)
     else:
         return np.nan
-    
+def running_mean(x, N):
+    cumsum = np.cumsum(np.insert(x, 0, 0)) 
+    return (cumsum[N:] - cumsum[:-N]) / float(N)
 class EpisodicLifeEnv(gym.Wrapper):
     def __init__(self, env):
         """Make end-of-life == end-of-episode, but only reset on true game over.
@@ -595,6 +596,7 @@ def gather_data(remote,parent_remote,first,render):
     env=gym.make("BreakoutNoFrameskip-v4")
     env = NoopResetEnv(env, noop_max=30)
     env = MaxAndSkipEnv(env, skip=4)
+    env.seed(myseed)
     env = WarpFrame(env)
     env = EpisodicLifeEnv(env)
     env = ClipRewardEnv(env)
