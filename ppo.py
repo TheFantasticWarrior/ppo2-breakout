@@ -91,8 +91,8 @@ def main():
                 np.random.shuffle(order)
                 start=0
                 for j in range(nminibatch):
-                    sli=order[start:stasamples]
-                    starsamples
+                    sli=order[start:start+samplesperbatch]
+                    start+samplesperbatch
                     
                     pactions,nlp,adv,rets_ext,old_pred_ext=map(lambda x:tf.constant(x.swapaxes(0, 1).flatten()[sli]),\
                         (buf_acs,buf_nlps,buf_advs_ext,bufs_rets_ext,buf_pred_ext))
