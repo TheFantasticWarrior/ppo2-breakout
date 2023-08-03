@@ -17,7 +17,7 @@ score:
 - recorded episode scores wrong ***AGAIN*** (should've simply used `Monitor`)
 
 explained variance:
-- model should be copied, a single layer as value network with the rest shared doesn't work
+- make sure to `tf.squeeze` the value prediction, that's what fixed my ev
 - make sure you pass in 1d for explained variance, the 2d function returns 2d variance which is hard to log, and make sure you know what `tf.squeeze` does and that it doesn't shrink dimentions if the dimension is larger than 1
 
 multiprocessing:
